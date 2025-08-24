@@ -1,0 +1,8 @@
+{
+  "name": "CSS Creative Suite",
+  "description": "A multi-modal AI application with session persistence. Features a CS assistant, Learning Hub, user profiles, and support for chatting, generating media, and exploring new concepts.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}

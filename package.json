@@ -1,0 +1,21 @@
+{
+  "name": "css-creative-suite",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && node server.js",
+    "build": "esbuild index.tsx --bundle --outfile=public/index.js --jsx-factory=h --jsx-fragment=preact.Fragment",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^0.16.0",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "esbuild": "^0.21.4",
+    "typescript": "^5.4.5"
+  }
+}
