@@ -30,12 +30,12 @@ export default async function handler(req: Request) {
                 const stream = new ReadableStream({
                     async start(controller) {
                         for await (const chunk of result) {
-                            controller.enqueue(new TextEncoder().encode(JSON.stringify(chunk)));
+                            controller.enqueue(new TextEncoder().encode(JSON.stringify(chunk) + '\n'));
                         }
                         controller.close();
                     },
                 });
-                return new Response(stream, { headers: { 'Content-Type': 'application/json' } });
+                return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
             }
             case 'generateImages': {
                 const result = await ai.models.generateImages(payload);

@@ -34,9 +34,9 @@ app.post('/api/gemini', async (req, res) => {
             }
             case 'generateContentStream': {
                 const result = await ai.models.generateContentStream(payload);
-                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Type', 'application/x-ndjson');
                 for await (const chunk of result) {
-                    res.write(JSON.stringify(chunk)); 
+                    res.write(JSON.stringify(chunk) + '\n');
                 }
                 return res.end();
             }

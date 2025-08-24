@@ -45,7 +45,8 @@ const { h, render, Component, createContext } = preact;
 const { useState, useEffect, useRef, useCallback, useMemo, useContext, useLayoutEffect } = preactHooks;
 const html = htm.bind(h);
 
-// --- SECURE API CALLER ---
+// --- SECURE API CALLER & RESPONSE PARSERS ---
+
 // Helper to call our secure backend proxy instead of the Gemini API directly
 const callApi = async (action: string, model: string, payload: any) => {
     const response = await fetch('/api/gemini', {
@@ -70,6 +71,27 @@ const callApi = async (action: string, model: string, payload: any) => {
     }
 
     return response.json();
+};
+
+// Helper to safely extract plain text from a raw API response
+const extractTextFromApiResponse = (response: any): string => {
+    return response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+};
+
+// Helper to safely extract and parse JSON from a raw API response
+const extractJsonFromApiResponse = (response: any): any | null => {
+    try {
+        const text = extractTextFromApiResponse(response);
+        if (text) {
+            // The API might return the JSON wrapped in markdown backticks
+            const cleanedText = text.replace(/^```json\s*/, '').replace(/```$/, '');
+            return JSON.parse(cleanedText);
+        }
+        return null;
+    } catch (e) {
+        console.error("Failed to parse JSON from API response", e, response);
+        return null;
+    }
 };
 
 const ADMIN_EMAIL = 'oladoyeheritage445@gmail.com';
@@ -1416,7 +1438,8 @@ const StudioView = () => {
             const textToProcess = activeDocument.content;
             const prompt = `${promptText}: \n\n"${textToProcess}"`;
             const response = await callApi('generateContent', 'gemini-2.5-flash', { contents: prompt });
-            const newContent = action === 'Continue Writing' ? activeDocument.content + '\n' + response.text : response.text;
+            const responseText = extractTextFromApiResponse(response);
+            const newContent = action === 'Continue Writing' ? activeDocument.content + '\n' + responseText : responseText;
             updateDocument(activeDocument.id, { content: newContent });
             logActivity(`Used Studio AI: ${action}`, activeDocument.title);
             showToast(`${action} completed!`, 'success');
@@ -1587,12 +1610,17 @@ const CodeSandboxView = () => {
                 }
             };
             const response = await callApi('generateContent', 'gemini-2.5-flash', payload);
-            const result = JSON.parse(response.text);
-            setHtmlCode(result.html || '');
-            setCssCode(result.css || '');
-            setJsCode(result.js || '');
-            logActivity('Used Sandbox AI', aiPrompt);
-            showToast('AI has generated your code!', 'success');
+            const result = extractJsonFromApiResponse(response);
+            
+            if (result) {
+                setHtmlCode(result.html || '');
+                setCssCode(result.css || '');
+                setJsCode(result.js || '');
+                logActivity('Used Sandbox AI', aiPrompt);
+                showToast('AI has generated your code!', 'success');
+            } else {
+                throw new Error("Failed to parse valid JSON from AI response.");
+            }
         } catch (error) {
             console.error('Sandbox AI Error:', error);
             showToast('AI failed to generate valid code.', 'error');
@@ -1701,7 +1729,7 @@ const NovelWriterView = () => {
                     : `Based on the previous content, write the next chapter (Chapter ${i}) of the novel titled "${title}". Ensure a logical continuation of the story. Previous context:\n\n${chapterContext.slice(-2000)}`; // Provide last 2000 chars as context
 
                 const response = await callApi('generateContent', 'gemini-2.5-flash', { contents: prompt });
-                const chapterContent = response.text;
+                const chapterContent = extractTextFromApiResponse(response);
                 allChapters.push(chapterContent);
                 chapterContext += `Chapter ${i}:\n${chapterContent}\n\n`;
                 setGeneratedChapters([...allChapters]);
@@ -1871,7 +1899,6 @@ const ChatView = () => {
         const newUserMessage: ChatMessage = { role: 'user', parts: [{ text: currentMessage }] };
         const newMessages = [...activeSession.messages, newUserMessage];
         
-        // Optimistically update UI
         setChatSessions(sessions => sessions.map(s => s.id === activeChatSessionId ? { ...s, messages: newMessages } : s));
         setCurrentMessage("");
         setIsLoading(true);
@@ -1882,6 +1909,7 @@ const ChatView = () => {
             const reader = stream.getReader();
             const decoder = new TextDecoder();
             let fullResponse = "";
+            let buffer = "";
 
             // Add an empty model message to update as chunks arrive
             setChatSessions(sessions => sessions.map(s => {
@@ -1895,30 +1923,33 @@ const ChatView = () => {
                 const { value, done } = await reader.read();
                 if (done) break;
 
-                // The backend proxy sends raw JSON chunks from the stream
-                const textChunk = decoder.decode(value);
-                
-                // HACK: The stream from the proxy might not be perfectly formed JSON objects on each chunk.
-                // A more robust solution would use a proper streaming parser or NDJSON.
-                // For now, we'll try to parse what we can.
-                try {
-                    const json = JSON.parse(textChunk);
-                    fullResponse += json.text;
-                } catch(e) {
-                    // It's likely not a full JSON object yet, just append the raw text. This is a fallback.
-                     fullResponse += textChunk;
-                }
-                
-                // Update the last message (the model's response) with the new content
-                setChatSessions(sessions => sessions.map(s => {
-                    if (s.id === activeChatSessionId) {
-                        const lastMessageIndex = s.messages.length - 1;
-                        const updatedMessages = [...s.messages];
-                        updatedMessages[lastMessageIndex] = { role: 'model', parts: [{ text: fullResponse }] };
-                        return { ...s, messages: updatedMessages };
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.trim() === '') continue;
+                    try {
+                        const chunkJson = JSON.parse(line);
+                        const textPart = extractTextFromApiResponse(chunkJson);
+                        fullResponse += textPart;
+
+                        // Update the last message (the model's response) with the new content
+                        setChatSessions(sessions => sessions.map(s => {
+                            if (s.id === activeChatSessionId) {
+                                const updatedMessages = [...s.messages];
+                                const lastMessage = updatedMessages[updatedMessages.length - 1];
+                                if (lastMessage && lastMessage.role === 'model') {
+                                    lastMessage.parts[0].text = fullResponse;
+                                }
+                                return { ...s, messages: updatedMessages };
+                            }
+                            return s;
+                        }));
+                    } catch (e) {
+                        console.error("Error parsing streamed JSON line: ", line, e);
                     }
-                    return s;
-                }));
+                }
             }
 
             setCurrentUser(prev => ({ ...prev!, usage: { ...prev!.usage, chats: prev!.usage.chats + 1 } }));
@@ -1927,8 +1958,7 @@ const ChatView = () => {
             console.error("Chat error:", error);
             showToast("The AI is having trouble responding. Please try again.", "error");
             const errorMessage: ChatMessage = { role: 'model', parts: [{ text: "Sorry, I couldn't process that. Please try again." }], error: true };
-            // Replace the optimistic message with an error
-             setChatSessions(sessions => sessions.map(s => s.id === activeChatSessionId ? { ...s, messages: [...newMessages, errorMessage] } : s));
+            setChatSessions(sessions => sessions.map(s => s.id === activeChatSessionId ? { ...s, messages: [...newMessages, errorMessage] } : s));
         } finally {
             setIsLoading(false);
         }
@@ -1986,7 +2016,7 @@ const ChatView = () => {
                                 <div class="message-content" dangerouslySetInnerHTML=${{ __html: marked.parse(msg.parts[0].text) }}></div>
                             </div>
                         `)}
-                        ${isLoading && activeSession.messages[activeSession.messages.length-1].role === 'user' && html`
+                        ${isLoading && activeSession.messages[activeSession.messages.length-1]?.role === 'user' && html`
                             <div class="message model">
                                 <div class="message-content"><${Loader} text="AI is thinking..." /></div>
                             </div>
@@ -2234,10 +2264,14 @@ const ToolkitView = () => {
                     config: { responseMimeType: 'application/json', responseSchema: { type: 'ARRAY', items: { type: 'STRING' } } }
                 };
                 const response = await callApi('generateContent', 'gemini-2.5-flash', payload);
-                const parsedColors = JSON.parse(response.text);
-                setColors(parsedColors);
-                logActivity('Used Toolkit: Color Palette', prompt);
-                setCurrentUser(prev => ({...prev, usage: {...prev.usage, toolkit: prev.usage.toolkit + 1}}));
+                const parsedColors = extractJsonFromApiResponse(response);
+                if (Array.isArray(parsedColors)) {
+                    setColors(parsedColors);
+                    logActivity('Used Toolkit: Color Palette', prompt);
+                    setCurrentUser(prev => ({...prev, usage: {...prev.usage, toolkit: prev.usage.toolkit + 1}}));
+                } else {
+                    throw new Error("Invalid color data received");
+                }
             } catch (e) {
                 showToast('Failed to generate colors.', 'error');
             } finally { setIsLoading(false); }
@@ -2272,7 +2306,7 @@ const ToolkitView = () => {
             try {
                 const payload = { contents: `Generate a single CSS linear-gradient string for this theme: "${prompt}". Only return the "linear-gradient(...)" part.` };
                 const response = await callApi('generateContent', 'gemini-2.5-flash', payload);
-                setGradient(response.text);
+                setGradient(extractTextFromApiResponse(response));
                 logActivity('Used Toolkit: CSS Gradient', prompt);
                 setCurrentUser(prev => ({...prev, usage: {...prev.usage, toolkit: prev.usage.toolkit + 1}}));
             } catch (e) { showToast('Failed to generate gradient.', 'error'); } 
@@ -2347,7 +2381,7 @@ const CSAssistantView = () => {
             }
             
             const response = await callApi('generateContent', 'gemini-2.5-flash', { contents: prompt });
-            const modelMessage = { role: 'model', parts: response.text, id: generateUniqueId() };
+            const modelMessage = { role: 'model', parts: extractTextFromApiResponse(response), id: generateUniqueId() };
             setCsHistory(prev => [...prev, userMessage, modelMessage]);
             logActivity('Used CS Assistant', tool);
             setCurrentUser(prev => ({...prev, usage: {...prev.usage, csAssistant: prev.usage.csAssistant + 1}}));
@@ -2445,14 +2479,20 @@ const LearningHubView = () => {
                 }
             };
             const response = await callApi('generateContent', 'gemini-2.5-flash', payload);
-            const quizData = { ...JSON.parse(response.text), id: generateUniqueId() };
-            setCurrentQuiz(quizData);
-            setLearningHubQuizzes(prev => [...prev, quizData]);
-            setQuizState('taking');
-            setUserAnswers({});
-            setCurrentQuestionIndex(0);
-            logActivity('Generated Quiz', topic);
-            setCurrentUser(prev => ({...prev, usage: {...prev.usage, quizzes: prev.usage.quizzes + 1}}));
+            const quizJson = extractJsonFromApiResponse(response);
+
+            if (quizJson && quizJson.questions) {
+                 const quizData = { ...quizJson, id: generateUniqueId() };
+                setCurrentQuiz(quizData);
+                setLearningHubQuizzes(prev => [...prev, quizData]);
+                setQuizState('taking');
+                setUserAnswers({});
+                setCurrentQuestionIndex(0);
+                logActivity('Generated Quiz', topic);
+                setCurrentUser(prev => ({...prev, usage: {...prev.usage, quizzes: prev.usage.quizzes + 1}}));
+            } else {
+                throw new Error("Invalid quiz data received");
+            }
         } catch (e) {
             showToast('Failed to generate quiz.', 'error');
             setQuizState('idle');
