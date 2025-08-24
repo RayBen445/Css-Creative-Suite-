@@ -29,11 +29,11 @@ app.post('/api/gemini', async (req, res) => {
 
         switch (action) {
             case 'generateContent': {
-                const result = await ai.models.generateContent(payload);
+                const result = await ai.models.generateContent({ model, ...payload });
                 return res.json(result);
             }
             case 'generateContentStream': {
-                const result = await ai.models.generateContentStream(payload);
+                const result = await ai.models.generateContentStream({ model, ...payload });
                 res.setHeader('Content-Type', 'application/x-ndjson');
                 for await (const chunk of result) {
                     res.write(JSON.stringify(chunk) + '\n');
@@ -41,11 +41,11 @@ app.post('/api/gemini', async (req, res) => {
                 return res.end();
             }
             case 'generateImages': {
-                const result = await ai.models.generateImages(payload);
+                const result = await ai.models.generateImages({ model, ...payload });
                 return res.json(result);
             }
             case 'generateVideos': {
-                const result = await ai.models.generateVideos(payload);
+                const result = await ai.models.generateVideos({ model, ...payload });
                 return res.json(result);
             }
             case 'getVideosOperation': {

@@ -22,11 +22,11 @@ export default async function handler(req: Request) {
 
         switch (action) {
             case 'generateContent': {
-                const result = await ai.models.generateContent(payload);
+                const result = await ai.models.generateContent({ model, ...payload });
                 return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
             }
             case 'generateContentStream': {
-                const result = await ai.models.generateContentStream(payload);
+                const result = await ai.models.generateContentStream({ model, ...payload });
                 const stream = new ReadableStream({
                     async start(controller) {
                         for await (const chunk of result) {
@@ -38,11 +38,11 @@ export default async function handler(req: Request) {
                 return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
             }
             case 'generateImages': {
-                const result = await ai.models.generateImages(payload);
+                const result = await ai.models.generateImages({ model, ...payload });
                 return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
             }
             case 'generateVideos': {
-                const result = await ai.models.generateVideos(payload);
+                const result = await ai.models.generateVideos({ model, ...payload });
                 return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
             }
             case 'getVideosOperation': {
